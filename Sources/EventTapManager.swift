@@ -19,6 +19,9 @@ func logDebug(_ message: String) {
     NSLog("[MouseBack] %@", message)
 }
 
+typealias CGEventCopyIOHIDEventFunc = @convention(c) (CGEvent) -> Unmanaged<AnyObject>?
+typealias IOHIDEventGetSenderIDFunc = @convention(c) (AnyObject) -> UInt64
+
 final class EventTapManager {
     static let shared = EventTapManager()
 
@@ -26,7 +29,13 @@ final class EventTapManager {
     private var runLoopSource: CFRunLoopSource?
     private var permissionTimer: Timer?
     private var lastTriggerTime: TimeInterval = 0
-    private let debounceInterval: TimeInterval = 0.25
+    private let debounceInterval: TimeInterval = 0.20
+
+    private var copyIOHIDEvent: CGEventCopyIOHIDEventFunc?
+    private var getSenderID: IOHIDEventGetSenderIDFunc?
+
+    // SenderID mouse yang diketahui (akan terdeteksi otomatis saat event mouse diterima)
+    var knownMouseSenderIDs: Set<UInt64> = []
 
     var onStatusChanged: ((Bool, Bool) -> Void)?
     var onButtonTriggered: ((String) -> Void)?
@@ -63,8 +72,31 @@ final class EventTapManager {
     private(set) var hasPermission: Bool = false
 
     private init() {
+        setupDynamicSymbols()
         hasPermission = checkAccessibility(prompt: false)
         logDebug("EventTapManager diinisialisasi. Izin Aksesibilitas: \(hasPermission)")
+    }
+
+    private func setupDynamicSymbols() {
+        if let cgHandle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY) {
+            if let sym = dlsym(cgHandle, "CGEventCopyIOHIDEvent") {
+                copyIOHIDEvent = unsafeBitCast(sym, to: CGEventCopyIOHIDEventFunc.self)
+            }
+        }
+        if let iokitHandle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY) {
+            if let sym = dlsym(iokitHandle, "IOHIDEventGetSenderID") {
+                getSenderID = unsafeBitCast(sym, to: IOHIDEventGetSenderIDFunc.self)
+            }
+        }
+    }
+
+    func extractSenderID(for event: CGEvent) -> UInt64? {
+        guard let copyFunc = copyIOHIDEvent, let getFunc = getSenderID else { return nil }
+        if let unmanagedHID = copyFunc(event) {
+            let hidEvent = unmanagedHID.takeRetainedValue()
+            return getFunc(hidEvent)
+        }
+        return nil
     }
 
     func start() {
@@ -119,7 +151,8 @@ final class EventTapManager {
             .rightMouseDown, .rightMouseUp,
             .otherMouseDown, .otherMouseUp,
             .scrollWheel,
-            .keyDown, .flagsChanged
+            .keyDown, .keyUp,
+            .flagsChanged
         ]
         var eventMask: CGEventMask = 0
         for evType in eventTypes {
@@ -195,23 +228,65 @@ final class EventTapManager {
 
         let buttonNumber = event.getIntegerValueField(.mouseEventButtonNumber)
         let keycode = event.getIntegerValueField(.keyboardEventKeycode)
-        let isSide = (buttonNumber == 3 || buttonNumber == 4 || buttonNumber == 5)
+        let senderID = extractSenderID(for: event) ?? 0
 
-        let desc = "[CGEventTap] Tipe: \(type.rawValue), Button: \(buttonNumber), Key: \(keycode)"
-        logDebug(desc)
-        HUDWindowController.shared.updateEvent(text: desc, isSideButton: isSide)
-
-        guard isEnabled else {
-            return Unmanaged.passUnretained(event)
+        // Catat sender ID mouse saat klik mouse terjadi
+        if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown || type == .scrollWheel {
+            if senderID != 0 {
+                knownMouseSenderIDs.insert(senderID)
+            }
         }
 
+        // 1. PENANGANAN TOMBOL SAMPING UGREEN (YANG MENGIRIM KEY 123 DAN KEY 124)
+        if keycode == 123 || keycode == 124 {
+            let isKeyDown = (type == .keyDown)
+            let isKeyUp = (type == .keyUp)
+
+            if isKeyDown || isKeyUp {
+                let desc = "[UGREEN Tombol Samping] Key: \(keycode) (Tipe: \(type.rawValue))"
+                logDebug(desc)
+
+                if isKeyDown {
+                    // Key 123 = Panah Kiri (Back)
+                    // Key 124 = Panah Kanan (Forward)
+                    let isBack = (keycode == 123)
+                    let shouldGoBack = isSwapped ? !isBack : isBack
+
+                    if shouldGoBack {
+                        let msg = "🟢 KEMBALI (Cmd + [) | Ugreen Side Button (Key \(keycode))"
+                        logDebug(">>> \(msg)")
+                        HUDWindowController.shared.updateEvent(text: msg, isSideButton: true)
+                        triggerBack()
+                        onButtonTriggered?("Kembali (Cmd + [)")
+                    } else {
+                        let msg = "🟢 MAJU (Cmd + ]) | Ugreen Side Button (Key \(keycode))"
+                        logDebug(">>> \(msg)")
+                        HUDWindowController.shared.updateEvent(text: msg, isSideButton: true)
+                        triggerForward()
+                        onButtonTriggered?("Maju (Cmd + ])")
+                    }
+                }
+
+                // Konsumsi event panah mentah agar tidak menggeser kursor / horizontal scroll
+                return nil
+            }
+        }
+
+        // 2. PENANGANAN MOUSE STANDARD LAINNYA (JIKA MENGIRIM BUTTON 3, 4, 5)
         if type == .otherMouseDown || type == .otherMouseUp {
+            let isSide = (buttonNumber == 3 || buttonNumber == 4 || buttonNumber == 5)
             if isSide {
                 if type == .otherMouseDown {
                     processButtonAction(buttonNumber: Int(buttonNumber), source: "CGEventTap")
                 }
-                return nil // Cegah event mentah diteruskan
+                return nil
             }
+        }
+
+        // Log interaksi biasa untuk pemantauan HUD
+        if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown {
+            let desc = "Klik: Button \(buttonNumber) (Tipe \(type.rawValue))"
+            HUDWindowController.shared.updateEvent(text: desc, isSideButton: false)
         }
 
         return Unmanaged.passUnretained(event)
@@ -243,6 +318,7 @@ final class EventTapManager {
             return
         }
         lastTriggerTime = now
+        // Kirim shortcut navigasi Kembali: Cmd + [
         simulateShortcut(keyCode: 0x21, flags: .maskCommand)
     }
 
@@ -253,6 +329,7 @@ final class EventTapManager {
             return
         }
         lastTriggerTime = now
+        // Kirim shortcut navigasi Maju: Cmd + ]
         simulateShortcut(keyCode: 0x1E, flags: .maskCommand)
     }
 
