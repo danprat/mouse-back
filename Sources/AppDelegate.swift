@@ -13,16 +13,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var accessibilityMenuItem: NSMenuItem!
     private var globalMonitor: Any?
 
-    private var isHUDVisible: Bool = true
+    private var isHUDVisible: Bool = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        logDebug("=== APLIKASI MOUSEBACK DIMULAI (DENGAN PEMANTAU HUD) ===")
+        logDebug("=== APLIKASI MOUSEBACK DIMULAI ===")
         setupStatusBar()
         setupEventTap()
         setupGlobalMonitor()
 
-        // Tampilkan HUD pemantau langsung di layar
-        HUDWindowController.shared.showHUD()
+        if isHUDVisible {
+            HUDWindowController.shared.showHUD()
+        }
     }
 
     private func setupStatusBar() {

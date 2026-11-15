@@ -1,48 +1,53 @@
 # 🖱️ MouseBack
 
-Aplikasi native macOS kecil, ringan, dan efisien untuk mengaktifkan fungsi tombol samping (**Back** & **Forward**) pada mouse Bluetooth Ugreen dan mouse sejenis lainnya.
+Aplikasi native macOS kecil, ringan, dan efisien untuk mengaktifkan fungsi navigasi tombol samping (**Kembali / Back** & **Maju / Forward**) pada mouse Bluetooth UGREEN dan mouse lainnya.
 
 ---
 
-## ✨ Fitur Utama
+## ✨ Fitur & Keunggulan
 
-- **Navigasi Cepat**: Menerjemahkan tombol samping mouse menjadi perintah **Kembali (`Cmd + [`)** dan **Maju (`Cmd + ]`)**.
-- **Kompatibilitas Luas**: Bekerja otomatis di Safari, Google Chrome, Arc, Brave, Microsoft Edge, Firefox, Finder, dan berbagai aplikasi macOS lainnya.
-- **Menu Bar Utility**: Berjalan di status bar atas (tanpa memenuhi Dock atau app switcher).
-- **Tukar Tombol (Swap)**: Opsi fleksibel jika posisi tombol samping fisik pada mouse Anda terbalik.
-- **Launch at Login**: Dapat diatur otomatis aktif setiap kali Mac dinyalakan.
-- **Ringan & Hemat Daya**: Dibuat murni dengan Swift dan CoreGraphics tanpa framework pihak ketiga.
+- **Dukungan Khusus Mouse UGREEN BLE**:
+  Mouse Bluetooth UGREEN (misal: UGREEN BLE Mouse VID `0x32C2` / PID `0x0012`) mengirimkan sinyal panah keyboard internal (`Key 123` = Panah Kiri, `Key 124` = Panah Kanan). MouseBack menangkap sinyal ini dan otomatis menerjemahkannya menjadi navigasi browser:
+  - **Tombol Belakang** (`Key 123`): **Kembali (`Cmd + [`)**
+  - **Tombol Depan** (`Key 124`): **Maju (`Cmd + ]`)**
+- **Dukungan Mouse Standar Lainnya**: Mendukung tombol mouse standar 3, 4, dan 5 (`otherMouseDown`).
+- **Kompatibilitas Penuh**: Berfungsi di BrowserOS Neo, Google Chrome, Safari, Arc, Brave, Microsoft Edge, Firefox, Finder, dan aplikasi macOS lainnya.
+- **Menu Bar Utility**: Berjalan di status bar atas Mac tanpa memenuhi Dock atau app switcher.
+- **Tukar Tombol (Swap)**: Opsi instan jika Anda ingin membalik fungsi tombol depan dan belakang.
+- **Launch at Login**: Opsi otomatis aktif di latar belakang setiap kali Mac dinyalakan.
+- **Keamanan Stabil**: Ditandatangani dengan *Designated Requirement* stabil (`com.dany.mouseback`) sehingga izin Aksesibilitas tidak ter-reset saat aplikasi dibuka-tutup.
+- **Jendela Monitor Sinyal (HUD)**: Panel opsional di Menu Bar untuk memantau sinyal hardware mouse secara langsung (*real-time*).
 
 ---
 
 ## 🚀 Cara Menjalankan
 
-### 1. Jalankan Aplikasi Langsung
-Cukup klik ganda **`MouseBack.app`** di folder ini, atau jalankan melalui Terminal:
+### 1. Buka Aplikasi
+Cukup klik ganda **`MouseBack.app`** di folder ini atau jalankan melalui Terminal:
 ```bash
 open MouseBack.app
 ```
 
-*(Opsional: Anda bisa memindahkan `MouseBack.app` ke folder `/Applications` Mac Anda jika ingin dipasang permanen).*
+*(Opsional: Anda bisa memindahkan `MouseBack.app` ke folder `/Applications` Mac Anda).*
 
-### 2. Berikan Izin Aksesibilitas (Hanya Sekali di Awal)
-Karena macOS memerlukan izin keamanan untuk mendeteksi tombol mouse tambahan:
-1. Saat aplikasi dibuka, macOS akan menampilkan dialog izin aksesibilitas.
-2. Klik tombol **Open System Settings** (atau buka menu bar MouseBack > **Buka Pengaturan Aksesibilitas...**).
-3. Masuk ke **Privacy & Security** > **Accessibility**.
-4. Aktifkan sakelar toggle untuk **MouseBack**.
-5. Ikon di Menu Bar akan otomatis berubah menjadi status **🟢 MouseBack: Aktif** tanpa perlu me-restart aplikasi!
+### 2. Izin Aksesibilitas (Hanya Sekali di Awal)
+1. Buka **System Settings** > **Privacy & Security** > **Accessibility**.
+2. Pastikan sakelar **MouseBack** dalam posisi **ON**.
+3. Status di Menu Bar akan langsung menampilkan **🟢 MouseBack: Aktif**.
 
 ---
 
-## ⚙️ Opsi di Menu Bar
+## ⚙️ Menu Bar
 
-Klik ikon mouse di status bar atas layar untuk mengakses menu:
-- **Status**: Menampilkan status saat ini (*Aktif*, *Nonaktif*, atau *Butuh Izin Aksesibilitas*).
-- **Aktifkan MouseBack**: Menyalakan atau mematikan fungsi tombol samping kapan saja.
-- **Tukar Tombol Samping (Swap Back / Forward)**: Centang jika Anda ingin tombol depan menjadi Back dan tombol belakang menjadi Forward.
-- **Buka Otomatis saat Login**: Menjadikan aplikasi otomatis berjalan di background saat Mac menyala.
-- **Buka Pengaturan Aksesibilitas...**: Pintasan cepat ke Pengaturan Sistem macOS.
+Klik ikon mouse di status bar atas layar Mac Anda:
+- **Status**: Menampilkan status saat ini (*🟢 Aktif*, *⚪ Nonaktif*, atau *🟡 Butuh Izin Aksesibilitas*).
+- **Aktifkan MouseBack**: Toggle On/Off fungsi penangkapan tombol.
+- **Tukar Tombol Samping (Swap Back / Forward)**: Membalik arah tombol.
+- **Tampilkan Jendela Monitor Sinyal (HUD)**: Membuka panel transparan di pojok layar untuk melihat kode sinyal mouse secara langsung.
+- **Tampilkan Notifikasi Pop-up saat Tombol Ditekan**: Memunculkan banner pop-up saat tombol samping diklik.
+- **Buka Otomatis saat Login**: Menjadikan aplikasi otomatis berjalan saat Mac dinyalakan.
+- **Buka Pengaturan Aksesibilitas...**: Pintasan langsung ke pengaturan sistem macOS.
+- **Buka File Log (/tmp/mouseback.log)**: Membuka log aktivitas sistem.
 - **Keluar**: Menutup aplikasi sepenuhnya.
 
 ---
@@ -53,4 +58,4 @@ Jika Anda ingin mengubah kode di folder `Sources/`, cukup jalankan:
 ```bash
 ./build.sh
 ```
-Skrip ini akan mengompilasi ulang kode sumber Swift dan menghasilkan bundle `MouseBack.app` yang sudah ditandatangani (*ad-hoc codesigned*).
+Skrip ini akan mengompilasi kode Swift dan menghasilkan bundle `MouseBack.app` yang ditandatangani.
