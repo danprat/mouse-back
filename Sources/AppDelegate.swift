@@ -1,15 +1,18 @@
 import AppKit
 import ServiceManagement
+import UserNotifications
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var toggleMenuItem: NSMenuItem!
     private var swapMenuItem: NSMenuItem!
+    private var notificationMenuItem: NSMenuItem!
     private var launchAtLoginMenuItem: NSMenuItem!
     private var accessibilityMenuItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        logDebug("Aplikasi MouseBack diluncurkan.")
         setupStatusBar()
         setupEventTap()
     }
@@ -52,21 +55,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         swapMenuItem.target = self
         menu.addItem(swapMenuItem)
 
+        // 4. Opsi Notifikasi Pengujian
+        notificationMenuItem = NSMenuItem(title: "Tampilkan Notifikasi saat Tombol Ditekan (Tes)", action: #selector(toggleNotifications), keyEquivalent: "")
+        notificationMenuItem.target = self
+        menu.addItem(notificationMenuItem)
+
         menu.addItem(NSMenuItem.separator())
 
-        // 4. Launch at Login
+        // 5. Launch at Login
         launchAtLoginMenuItem = NSMenuItem(title: "Buka Otomatis saat Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         launchAtLoginMenuItem.target = self
         menu.addItem(launchAtLoginMenuItem)
 
-        // 5. Aksesibilitas
+        // 6. Aksesibilitas
         accessibilityMenuItem = NSMenuItem(title: "Buka Pengaturan Aksesibilitas...", action: #selector(openAccessibilitySettings), keyEquivalent: "")
         accessibilityMenuItem.target = self
         menu.addItem(accessibilityMenuItem)
 
+        // 7. Buka File Log
+        let logMenuItem = NSMenuItem(title: "Buka File Log (/tmp/mouseback.log)...", action: #selector(openLogFile), keyEquivalent: "")
+        logMenuItem.target = self
+        menu.addItem(logMenuItem)
+
         menu.addItem(NSMenuItem.separator())
 
-        // 6. Tentang & Keluar
+        // 8. Tentang & Keluar
         let aboutMenuItem = NSMenuItem(title: "Tentang MouseBack", action: #selector(showAbout), keyEquivalent: "")
         aboutMenuItem.target = self
         menu.addItem(aboutMenuItem)
@@ -85,10 +98,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.updateMenuStates()
             }
         }
+
+        EventTapManager.shared.onButtonTriggered = { [weak self] action in
+            guard EventTapManager.shared.showNotifications else { return }
+            DispatchQueue.main.async {
+                self?.showNotificationBanner(title: "MouseBack Terdeteksi", message: "Aksi: \(action)")
+            }
+        }
+
         EventTapManager.shared.start()
 
         if !EventTapManager.shared.hasPermission {
-            // Tampilkan permintaan izin bawaan macOS jika pertama kali
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 EventTapManager.shared.requestPermission()
             }
@@ -96,27 +116,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        // Cek izin langsung saat menu dibuka
+        _ = EventTapManager.shared.checkAccessibility(prompt: false)
         updateMenuStates()
     }
 
     private func updateMenuStates() {
         let isEnabled = EventTapManager.shared.isEnabled
-        let hasPermission = EventTapManager.shared.hasPermission
+        let hasPermission = EventTapManager.shared.checkAccessibility(prompt: false)
         let isSwapped = EventTapManager.shared.isSwapped
+        let showNotifications = EventTapManager.shared.showNotifications
 
         if !hasPermission {
             statusMenuItem.title = "🟡 Butuh Izin Aksesibilitas"
-            accessibilityMenuItem.isHidden = false
         } else if isEnabled {
             statusMenuItem.title = "🟢 MouseBack: Aktif"
-            accessibilityMenuItem.isHidden = false
         } else {
             statusMenuItem.title = "⚪ MouseBack: Nonaktif"
-            accessibilityMenuItem.isHidden = false
         }
 
         toggleMenuItem.state = isEnabled ? .on : .off
         swapMenuItem.state = isSwapped ? .on : .off
+        notificationMenuItem.state = showNotifications ? .on : .off
 
         // Launch at login state
         if #available(macOS 13.0, *) {
@@ -128,6 +149,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func showNotificationBanner(title: String, message: String) {
+        let notification = NSUserNotification()
+        notification.title = title
+        notification.informativeText = message
+        NSUserNotificationCenter.default.deliver(notification)
+    }
+
     @objc private func toggleEnabled() {
         EventTapManager.shared.isEnabled.toggle()
         updateMenuStates()
@@ -135,6 +163,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleSwap() {
         EventTapManager.shared.isSwapped.toggle()
+        updateMenuStates()
+    }
+
+    @objc private func toggleNotifications() {
+        EventTapManager.shared.showNotifications.toggle()
         updateMenuStates()
     }
 
@@ -160,11 +193,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         EventTapManager.shared.openAccessibilitySettings()
     }
 
+    @objc private func openLogFile() {
+        let path = "/tmp/mouseback.log"
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil, attributes: nil)
+        }
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
     @objc private func showAbout() {
         let alert = NSAlert()
         alert.messageText = "MouseBack"
         alert.informativeText = """
-        Versi 1.0.0
+        Versi 1.1.0
         Aplikasi Menu Bar untuk mengaktifkan tombol samping (Back & Forward) pada mouse Bluetooth Ugreen dan mouse lainnya.
 
         Shortcut yang dikirim:
@@ -177,6 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func quitApp() {
+        logDebug("Aplikasi MouseBack dihentikan oleh pengguna.")
         NSApplication.shared.terminate(nil)
     }
 }
