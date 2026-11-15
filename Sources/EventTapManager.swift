@@ -21,6 +21,10 @@ func logDebug(_ message: String) {
 
 typealias CGEventCopyIOHIDEventFunc = @convention(c) (CGEvent) -> Unmanaged<AnyObject>?
 typealias IOHIDEventGetSenderIDFunc = @convention(c) (AnyObject) -> UInt64
+typealias IOHIDEventSystemClientCreateFunc = @convention(c) (CFAllocator?) -> AnyObject?
+typealias IOHIDEventSystemClientCopyServicesFunc = @convention(c) (AnyObject) -> CFArray?
+typealias IOHIDServiceClientCopyPropertyFunc = @convention(c) (AnyObject, CFString) -> AnyObject?
+typealias IOHIDServiceClientGetRegistryIDFunc = @convention(c) (AnyObject) -> UInt64
 
 final class EventTapManager {
     static let shared = EventTapManager()
@@ -28,14 +32,17 @@ final class EventTapManager {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var permissionTimer: Timer?
+    private var deviceRefreshTimer: Timer?
     private var lastTriggerTime: TimeInterval = 0
     private let debounceInterval: TimeInterval = 0.35
 
     private var copyIOHIDEvent: CGEventCopyIOHIDEventFunc?
     private var getSenderID: IOHIDEventGetSenderIDFunc?
 
-    // SenderID mouse yang diketahui (akan terdeteksi otomatis saat event mouse diterima)
-    var knownMouseSenderIDs: Set<UInt64> = []
+    // Daftar SenderID perangkat
+    private(set) var ugreenSenderIDs: Set<UInt64> = []
+    private(set) var keyboardSenderIDs: Set<UInt64> = []
+    private(set) var knownMouseSenderIDs: Set<UInt64> = []
 
     var onStatusChanged: ((Bool, Bool) -> Void)?
     var onButtonTriggered: ((String) -> Void)?
@@ -90,17 +97,64 @@ final class EventTapManager {
         }
     }
 
-    func extractSenderID(for event: CGEvent) -> UInt64? {
-        guard let copyFunc = copyIOHIDEvent, let getFunc = getSenderID else { return nil }
+    func refreshDeviceIDs() {
+        var ugreen: Set<UInt64> = []
+        var keyboards: Set<UInt64> = []
+
+        let iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY)
+        guard let iokit = iokit else { return }
+
+        guard let clientCreateSym = dlsym(iokit, "IOHIDEventSystemClientCreate"),
+              let copyServicesSym = dlsym(iokit, "IOHIDEventSystemClientCopyServices"),
+              let copyPropSym = dlsym(iokit, "IOHIDServiceClientCopyProperty"),
+              let getRegIDSym = dlsym(iokit, "IOHIDServiceClientGetRegistryID") else {
+            return
+        }
+
+        let clientCreate = unsafeBitCast(clientCreateSym, to: IOHIDEventSystemClientCreateFunc.self)
+        let copyServices = unsafeBitCast(copyServicesSym, to: IOHIDEventSystemClientCopyServicesFunc.self)
+        let copyProp = unsafeBitCast(copyPropSym, to: IOHIDServiceClientCopyPropertyFunc.self)
+        let getRegID = unsafeBitCast(getRegIDSym, to: IOHIDServiceClientGetRegistryIDFunc.self)
+
+        if let client = clientCreate(kCFAllocatorDefault), let services = copyServices(client) as? [AnyObject] {
+            for service in services {
+                let name = copyProp(service, "Product" as CFString) as? String ?? ""
+                let vid = (copyProp(service, "VendorID" as CFString) as? NSNumber)?.intValue ?? 0
+                let regID = getRegID(service)
+
+                if name.localizedCaseInsensitiveContains("UGREEN") || vid == 0x32C2 {
+                    ugreen.insert(regID)
+                    logDebug("Device UGREEN terdeteksi: '\(name)', RegID: 0x\(String(regID, radix: 16))")
+                } else if name.localizedCaseInsensitiveContains("Keyboard") || vid == 0x5AC {
+                    keyboards.insert(regID)
+                }
+            }
+        }
+
+        self.ugreenSenderIDs = ugreen
+        self.keyboardSenderIDs = keyboards
+        logDebug("Pembaruan ID Perangkat selesai. Ugreen: \(ugreen.count), Keyboard Fisik: \(keyboards.count)")
+    }
+
+    func extractSenderID(for event: CGEvent) -> UInt64 {
+        guard let copyFunc = copyIOHIDEvent, let getFunc = getSenderID else { return 0 }
         if let unmanagedHID = copyFunc(event) {
             let hidEvent = unmanagedHID.takeRetainedValue()
             return getFunc(hidEvent)
         }
-        return nil
+        return 0
     }
 
     func start() {
         logDebug("Memulai EventTapManager...")
+        refreshDeviceIDs()
+
+        // Pindai perangkat berkala setiap 10 detik jika ada Bluetooth baru tersambung
+        deviceRefreshTimer?.invalidate()
+        deviceRefreshTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            self?.refreshDeviceIDs()
+        }
+
         hasPermission = checkAccessibility(prompt: false)
 
         if hasPermission {
@@ -223,10 +277,29 @@ final class EventTapManager {
         }
 
         let keycode = event.getIntegerValueField(.keyboardEventKeycode)
+        let senderID = extractSenderID(for: event)
+
+        // Catat senderID mouse jika terdeteksi dari event mouse biasa
+        if type == .otherMouseDown || type == .otherMouseUp {
+            if senderID != 0 && !keyboardSenderIDs.contains(senderID) {
+                knownMouseSenderIDs.insert(senderID)
+            }
+        }
 
         // 1. PENANGANAN TOMBOL SAMPING UGREEN (YANG MENGIRIM KEY 123 DAN KEY 124)
         if keycode == 123 || keycode == 124 {
-            guard isEnabled else { return nil }
+            // Periksa apakah ini berasal dari mouse UGREEN
+            let isFromUgreen = ugreenSenderIDs.contains(senderID) || knownMouseSenderIDs.contains(senderID)
+            let isFromKeyboard = keyboardSenderIDs.contains(senderID)
+            let hasModifiers = !event.flags.intersection([.maskShift, .maskAlternate, .maskControl, .maskCommand]).isEmpty
+
+            // PENTING: Jika event berasal dari keyboard fisik, atau pengguna menekan kombinasi tombol (Shift/Alt/Ctrl/Cmd),
+            // atau BUKAN dari mouse Ugreen: BIARKAN LEWAT NORMALLY! Jangan diintersepsi!
+            if isFromKeyboard || hasModifiers || (!isFromUgreen && !ugreenSenderIDs.isEmpty) {
+                return Unmanaged.passUnretained(event)
+            }
+
+            guard isEnabled else { return Unmanaged.passUnretained(event) }
 
             if type == .keyDown {
                 let isBack = (keycode == 123)
@@ -247,7 +320,7 @@ final class EventTapManager {
                 }
             }
 
-            // Telan event agar tidak terjadi aksi ganda atau kursor bergeser
+            // Telan event khusus tombol panah dari mouse Ugreen
             return nil
         }
 
@@ -292,7 +365,6 @@ final class EventTapManager {
             return
         }
         lastTriggerTime = now
-        // Kirim shortcut navigasi Kembali: Cmd + [
         simulateShortcut(keyCode: 0x21, flags: .maskCommand)
     }
 
@@ -303,7 +375,6 @@ final class EventTapManager {
             return
         }
         lastTriggerTime = now
-        // Kirim shortcut navigasi Maju: Cmd + ]
         simulateShortcut(keyCode: 0x1E, flags: .maskCommand)
     }
 
@@ -327,6 +398,7 @@ final class EventTapManager {
 
     deinit {
         permissionTimer?.invalidate()
+        deviceRefreshTimer?.invalidate()
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
