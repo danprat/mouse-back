@@ -25,9 +25,11 @@ final class EventTapManager {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var permissionTimer: Timer?
+    private var lastTriggerTime: TimeInterval = 0
+    private let debounceInterval: TimeInterval = 0.25 // 250ms debounce
 
-    var onStatusChanged: ((Bool, Bool) -> Void)? // (isEnabled, hasPermission)
-    var onButtonTriggered: ((String) -> Void)?   // (actionName)
+    var onStatusChanged: ((Bool, Bool) -> Void)?
+    var onButtonTriggered: ((String) -> Void)?
 
     var isEnabled: Bool {
         get {
@@ -51,7 +53,7 @@ final class EventTapManager {
 
     var showNotifications: Bool {
         get {
-            UserDefaults.standard.bool(forKey: "MouseBackNotifications")
+            UserDefaults.standard.object(forKey: "MouseBackNotifications") as? Bool ?? true
         }
         set {
             UserDefaults.standard.set(newValue, forKey: "MouseBackNotifications")
@@ -69,13 +71,15 @@ final class EventTapManager {
         logDebug("Memulai EventTapManager...")
         hasPermission = checkAccessibility(prompt: false)
 
-        if !hasPermission {
-            logDebug("Izin belum diberikan. Memulai timer pengecekan berkala (setiap 1.5 detik)...")
+        if hasPermission {
+            setupTap()
+        } else {
+            logDebug("Izin belum aktif. Memulai timer pengecekan berkala...")
             permissionTimer?.invalidate()
-            permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
                 guard let self = self else { return }
                 if self.checkAccessibility(prompt: false) {
-                    logDebug("Izin Aksesibilitas terdeteksi telah DIBERIKAN oleh pengguna!")
+                    logDebug("Izin Aksesibilitas DIBERIKAN oleh pengguna!")
                     self.permissionTimer?.invalidate()
                     self.permissionTimer = nil
                     self.hasPermission = true
@@ -83,8 +87,6 @@ final class EventTapManager {
                     self.onStatusChanged?(self.isEnabled, self.hasPermission)
                 }
             }
-        } else {
-            setupTap()
         }
         onStatusChanged?(isEnabled, hasPermission)
     }
@@ -103,18 +105,17 @@ final class EventTapManager {
 
     func checkAccessibility(prompt: Bool) -> Bool {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: prompt] as CFDictionary
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        return trusted
+        return AXIsProcessTrustedWithOptions(options)
     }
 
-    private func setupTap() {
+    func setupTap() {
         guard eventTap == nil else {
-            logDebug("Tap sudah ada, memperbarui state...")
             updateTapState()
             return
         }
 
-        let eventMask: CGEventMask = (1 << CGEventType.otherMouseDown.rawValue) | (1 << CGEventType.otherMouseUp.rawValue)
+        let eventMask: CGEventMask = (1 << CGEventType.otherMouseDown.rawValue)
+            | (1 << CGEventType.otherMouseUp.rawValue)
 
         let refcon = Unmanaged.passUnretained(self).toOpaque()
 
@@ -126,8 +127,6 @@ final class EventTapManager {
             return manager.handleEvent(proxy: proxy, type: type, event: event)
         }
 
-        // PENTING: Gunakan .cghidEventTap terlebih dahulu karena mouse Bluetooth (Ugreen dll.)
-        // mengirim event pada level hardware HID. Jika gagal, baru gunakan .cgSessionEventTap.
         var tap: CFMachPort? = CGEvent.tapCreate(
             tap: .cghidEventTap,
             place: .headInsertEventTap,
@@ -140,7 +139,7 @@ final class EventTapManager {
         if tap != nil {
             logDebug("Berhasil membuat CGEventTap pada level .cghidEventTap!")
         } else {
-            logDebug("Gagal membuat pada level .cghidEventTap. Mencoba level .cgSessionEventTap...")
+            logDebug("Gagal pada .cghidEventTap. Mencoba .cgSessionEventTap...")
             tap = CGEvent.tapCreate(
                 tap: .cgSessionEventTap,
                 place: .headInsertEventTap,
@@ -152,7 +151,7 @@ final class EventTapManager {
             if tap != nil {
                 logDebug("Berhasil membuat CGEventTap pada level .cgSessionEventTap!")
             } else {
-                logDebug("GAGAL membuat CGEventTap pada semua level. Pastikan Izin Aksesibilitas sudah aktif di System Settings.")
+                logDebug("GAGAL membuat CGEventTap pada semua level.")
                 return
             }
         }
@@ -179,7 +178,6 @@ final class EventTapManager {
 
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            logDebug("Peringatan: EventTap sempat dinonaktifkan sistem (\(type.rawValue)), mengaktifkan kembali...")
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
@@ -192,40 +190,52 @@ final class EventTapManager {
 
         if type == .otherMouseDown || type == .otherMouseUp {
             let buttonNumber = event.getIntegerValueField(.mouseEventButtonNumber)
-            logDebug("Event mouse terdeteksi: type=\(type.rawValue), buttonNumber=\(buttonNumber)")
+            logDebug("[CGEventTap] Event mouse terdeteksi: type=\(type.rawValue), buttonNumber=\(buttonNumber)")
 
-            // Tombol 3 = Mouse Button 4 (umumnya Back)
-            // Tombol 4 = Mouse Button 5 (umumnya Forward)
-            // Tombol 5 = Beberapa mouse menamai Forward sebagai button 5
             if buttonNumber == 3 || buttonNumber == 4 || buttonNumber == 5 {
                 if type == .otherMouseDown {
-                    let isButtonBack = (buttonNumber == 3)
-                    let shouldGoBack = isSwapped ? !isButtonBack : isButtonBack
-
-                    if shouldGoBack {
-                        logDebug(">>> Aksi: KEMBALI (Back - Cmd + [) dipicu oleh buttonNumber \(buttonNumber)")
-                        triggerBack()
-                        onButtonTriggered?("Kembali (Cmd + [)")
-                    } else {
-                        logDebug(">>> Aksi: MAJU (Forward - Cmd + ]) dipicu oleh buttonNumber \(buttonNumber)")
-                        triggerForward()
-                        onButtonTriggered?("Maju (Cmd + ])")
-                    }
+                    processButtonAction(buttonNumber: Int(buttonNumber), source: "CGEventTap")
                 }
-                // Konsumsi event agar tidak menimbulkan efek samping lain
-                return nil
+                return nil // Konsumsi event agar tidak diteruskan mentah
             }
         }
 
         return Unmanaged.passUnretained(event)
     }
 
+    func processButtonAction(buttonNumber: Int, source: String) {
+        let isButtonBack = (buttonNumber == 3)
+        let shouldGoBack = isSwapped ? !isButtonBack : isButtonBack
+
+        if shouldGoBack {
+            logDebug(">>> [\(source)] Aksi KEMBALI (Cmd + [) dipicu oleh Button \(buttonNumber)")
+            triggerBack()
+            onButtonTriggered?("Kembali (Cmd + [)")
+        } else {
+            logDebug(">>> [\(source)] Aksi MAJU (Cmd + ]) dipicu oleh Button \(buttonNumber)")
+            triggerForward()
+            onButtonTriggered?("Maju (Cmd + ])")
+        }
+    }
+
     private func triggerBack() {
+        let now = Date().timeIntervalSince1970
+        guard now - lastTriggerTime > debounceInterval else {
+            logDebug("Debounce: lewati klik duplikat.")
+            return
+        }
+        lastTriggerTime = now
         // Cmd + [ (kVK_ANSI_LeftBracket = 0x21)
         simulateShortcut(keyCode: 0x21, flags: .maskCommand)
     }
 
     private func triggerForward() {
+        let now = Date().timeIntervalSince1970
+        guard now - lastTriggerTime > debounceInterval else {
+            logDebug("Debounce: lewati klik duplikat.")
+            return
+        }
+        lastTriggerTime = now
         // Cmd + ] (kVK_ANSI_RightBracket = 0x1E)
         simulateShortcut(keyCode: 0x1E, flags: .maskCommand)
     }
@@ -236,12 +246,11 @@ final class EventTapManager {
 
             if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true) {
                 keyDown.flags = flags
-                // Kirim ke session event tap (menjangkau aplikasi yang aktif di depan)
                 keyDown.post(tap: .cgSessionEventTap)
                 keyDown.post(tap: .cghidEventTap)
             }
 
-            usleep(25_000) // 25ms jeda agar OS dan browser mencatat event
+            usleep(25_000)
 
             if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) {
                 keyUp.flags = flags

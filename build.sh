@@ -25,7 +25,10 @@ if [ -f "AppIcon.icns" ]; then
     cp AppIcon.icns "${RESOURCES_DIR}/AppIcon.icns"
 fi
 
-echo "🔏 Menandatangani aplikasi (Ad-hoc codesign)..."
-codesign --force --deep --sign - "${BUNDLE_DIR}"
+echo "🔏 Menandatangani aplikasi dengan Designated Requirement stabil..."
+codesign --force --deep --sign - \
+    --identifier "com.dany.mouseback" \
+    --requirements '=designated => identifier "com.dany.mouseback"' \
+    "${BUNDLE_DIR}"
 
 echo "✅ Berhasil! Aplikasi tersedia di: ${BUNDLE_DIR}"

@@ -10,11 +10,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var notificationMenuItem: NSMenuItem!
     private var launchAtLoginMenuItem: NSMenuItem!
     private var accessibilityMenuItem: NSMenuItem!
+    private var globalMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        logDebug("Aplikasi MouseBack diluncurkan.")
+        logDebug("=== APLIKASI MOUSEBACK DIMULAI ===")
         setupStatusBar()
         setupEventTap()
+        setupGlobalMonitor()
     }
 
     private func setupStatusBar() {
@@ -56,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(swapMenuItem)
 
         // 4. Opsi Notifikasi Pengujian
-        notificationMenuItem = NSMenuItem(title: "Tampilkan Notifikasi saat Tombol Ditekan (Tes)", action: #selector(toggleNotifications), keyEquivalent: "")
+        notificationMenuItem = NSMenuItem(title: "Tampilkan Notifikasi Pop-up saat Tombol Ditekan", action: #selector(toggleNotifications), keyEquivalent: "")
         notificationMenuItem.target = self
         menu.addItem(notificationMenuItem)
 
@@ -102,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         EventTapManager.shared.onButtonTriggered = { [weak self] action in
             guard EventTapManager.shared.showNotifications else { return }
             DispatchQueue.main.async {
-                self?.showNotificationBanner(title: "MouseBack Terdeteksi", message: "Aksi: \(action)")
+                self?.showNotificationBanner(title: "MouseBack", message: "Tombol Ditekan: \(action)")
             }
         }
 
@@ -115,8 +117,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // AppKit Level Global Monitor sebagai pelengkap CGEventTap
+    private func setupGlobalMonitor() {
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.otherMouseDown, .otherMouseUp]) { [weak self] event in
+            logDebug("[NSEvent Monitor] Tipe: \(event.type.rawValue), Button: \(event.buttonNumber)")
+            if event.type == .otherMouseDown {
+                if event.buttonNumber == 3 || event.buttonNumber == 4 || event.buttonNumber == 5 {
+                    EventTapManager.shared.processButtonAction(buttonNumber: event.buttonNumber, source: "NSEventMonitor")
+                }
+            }
+        }
+        logDebug("NSEvent Global Monitor terdaftar.")
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
-        // Cek izin langsung saat menu dibuka
         _ = EventTapManager.shared.checkAccessibility(prompt: false)
         updateMenuStates()
     }
@@ -139,7 +153,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         swapMenuItem.state = isSwapped ? .on : .off
         notificationMenuItem.state = showNotifications ? .on : .off
 
-        // Launch at login state
         if #available(macOS 13.0, *) {
             launchAtLoginMenuItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
             launchAtLoginMenuItem.isEnabled = true
@@ -205,10 +218,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let alert = NSAlert()
         alert.messageText = "MouseBack"
         alert.informativeText = """
-        Versi 1.1.0
-        Aplikasi Menu Bar untuk mengaktifkan tombol samping (Back & Forward) pada mouse Bluetooth Ugreen dan mouse lainnya.
+        Versi 1.2.0
+        Aplikasi Menu Bar untuk tombol samping (Back & Forward) pada mouse Bluetooth Ugreen dan mouse lainnya.
 
-        Shortcut yang dikirim:
+        Shortcut navigasi:
         • Tombol Belakang: Cmd + [ (Kembali)
         • Tombol Depan: Cmd + ] (Maju)
         """
@@ -220,5 +233,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func quitApp() {
         logDebug("Aplikasi MouseBack dihentikan oleh pengguna.")
         NSApplication.shared.terminate(nil)
+    }
+
+    deinit {
+        if let monitor = globalMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
     }
 }
