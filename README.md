@@ -7,9 +7,10 @@ Aplikasi native macOS kecil, ringan, dan efisien untuk mengaktifkan fungsi navig
 ## ✨ Fitur & Keunggulan
 
 - **Dukungan Khusus Mouse UGREEN BLE**:
-  Mouse Bluetooth UGREEN (misal: UGREEN BLE Mouse VID `0x32C2` / PID `0x0012`) mengirimkan sinyal panah keyboard internal (`Key 123` = Panah Kiri, `Key 124` = Panah Kanan). MouseBack menangkap sinyal ini dan otomatis menerjemahkannya menjadi navigasi browser:
+  Mouse Bluetooth UGREEN (misal: UGREEN BLE Mouse VID `0x32C2` / PID `0x0012`) dapat mengirimkan sinyal panah keyboard internal (`Key 123` = Panah Kiri, `Key 124` = Panah Kanan). MouseBack menerjemahkannya menjadi navigasi browser hanya jika ID pengirim event cocok dengan perangkat UGREEN yang terdeteksi:
   - **Tombol Belakang** (`Key 123`): **Kembali (`Cmd + [`)**
   - **Tombol Depan** (`Key 124`): **Maju (`Cmd + ]`)**
+- **Panah Keyboard**: Panah dari keyboard fisik, kombinasi Shift/Option/Control/Command, dan panah tanpa ID pengirim UGREEN tetap berfungsi sebagai panah. Jika log mencatat `Ugreen: 0`, MouseBack tidak menerjemahkan sinyal panah menjadi navigasi; tombol samping yang mengirim event mouse standar tetap berfungsi.
 - **Dukungan Mouse Standar Lainnya**: Mendukung tombol mouse standar 3, 4, dan 5 (`otherMouseDown`).
 - **Kompatibilitas Penuh**: Berfungsi di BrowserOS Neo, Google Chrome, Safari, Arc, Brave, Microsoft Edge, Firefox, Finder, dan aplikasi macOS lainnya.
 - **Menu Bar Utility**: Berjalan di status bar atas Mac tanpa memenuhi Dock atau app switcher.
@@ -59,3 +60,8 @@ Jika Anda ingin mengubah kode di folder `Sources/`, cukup jalankan:
 ./build.sh
 ```
 Skrip ini akan mengompilasi kode Swift dan menghasilkan bundle `MouseBack.app` yang ditandatangani.
+
+Untuk memeriksa aturan sumber panah tanpa mouse atau izin Aksesibilitas:
+```bash
+swiftc -parse-as-library Sources/HUDWindow.swift Sources/EventTapManager.swift Tests/ArrowSourceTests.swift -o /tmp/mouseback-arrow-tests && /tmp/mouseback-arrow-tests
+```

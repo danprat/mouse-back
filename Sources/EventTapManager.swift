@@ -26,6 +26,22 @@ typealias IOHIDEventSystemClientCopyServicesFunc = @convention(c) (AnyObject) ->
 typealias IOHIDServiceClientCopyPropertyFunc = @convention(c) (AnyObject, CFString) -> AnyObject?
 typealias IOHIDServiceClientGetRegistryIDFunc = @convention(c) (AnyObject) -> UInt64
 
+func shouldTranslateUgreenArrow(
+    type: CGEventType,
+    keycode: Int64,
+    flags: CGEventFlags,
+    senderID: UInt64,
+    ugreenSenderIDs: Set<UInt64>
+) -> Bool {
+    guard type == .keyDown || type == .keyUp,
+          keycode == 123 || keycode == 124,
+          senderID != 0,
+          ugreenSenderIDs.contains(senderID) else {
+        return false
+    }
+    return flags.intersection([.maskShift, .maskAlternate, .maskControl, .maskCommand]).isEmpty
+}
+
 final class EventTapManager {
     static let shared = EventTapManager()
 
@@ -41,8 +57,6 @@ final class EventTapManager {
 
     // Daftar SenderID perangkat
     private(set) var ugreenSenderIDs: Set<UInt64> = []
-    private(set) var keyboardSenderIDs: Set<UInt64> = []
-    private(set) var knownMouseSenderIDs: Set<UInt64> = []
 
     var onStatusChanged: ((Bool, Bool) -> Void)?
     var onButtonTriggered: ((String) -> Void)?
@@ -99,7 +113,6 @@ final class EventTapManager {
 
     func refreshDeviceIDs() {
         var ugreen: Set<UInt64> = []
-        var keyboards: Set<UInt64> = []
 
         let iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY)
         guard let iokit = iokit else { return }
@@ -125,15 +138,12 @@ final class EventTapManager {
                 if name.localizedCaseInsensitiveContains("UGREEN") || vid == 0x32C2 {
                     ugreen.insert(regID)
                     logDebug("Device UGREEN terdeteksi: '\(name)', RegID: 0x\(String(regID, radix: 16))")
-                } else if name.localizedCaseInsensitiveContains("Keyboard") || vid == 0x5AC {
-                    keyboards.insert(regID)
                 }
             }
         }
 
         self.ugreenSenderIDs = ugreen
-        self.keyboardSenderIDs = keyboards
-        logDebug("Pembaruan ID Perangkat selesai. Ugreen: \(ugreen.count), Keyboard Fisik: \(keyboards.count)")
+        logDebug("Pembaruan ID Perangkat selesai. Ugreen: \(ugreen.count)")
     }
 
     func extractSenderID(for event: CGEvent) -> UInt64 {
@@ -277,25 +287,17 @@ final class EventTapManager {
         }
 
         let keycode = event.getIntegerValueField(.keyboardEventKeycode)
-        let senderID = extractSenderID(for: event)
-
-        // Catat senderID mouse jika terdeteksi dari event mouse biasa
-        if type == .otherMouseDown || type == .otherMouseUp {
-            if senderID != 0 && !keyboardSenderIDs.contains(senderID) {
-                knownMouseSenderIDs.insert(senderID)
-            }
-        }
 
         // 1. PENANGANAN TOMBOL SAMPING UGREEN (YANG MENGIRIM KEY 123 DAN KEY 124)
-        if keycode == 123 || keycode == 124 {
-            // Periksa apakah ini berasal dari mouse UGREEN
-            let isFromUgreen = ugreenSenderIDs.contains(senderID) || knownMouseSenderIDs.contains(senderID)
-            let isFromKeyboard = keyboardSenderIDs.contains(senderID)
-            let hasModifiers = !event.flags.intersection([.maskShift, .maskAlternate, .maskControl, .maskCommand]).isEmpty
-
-            // PENTING: Jika event berasal dari keyboard fisik, atau pengguna menekan kombinasi tombol (Shift/Alt/Ctrl/Cmd),
-            // atau BUKAN dari mouse Ugreen: BIARKAN LEWAT NORMALLY! Jangan diintersepsi!
-            if isFromKeyboard || hasModifiers || (!isFromUgreen && !ugreenSenderIDs.isEmpty) {
+        if (type == .keyDown || type == .keyUp) && (keycode == 123 || keycode == 124) {
+            let senderID = extractSenderID(for: event)
+            guard shouldTranslateUgreenArrow(
+                type: type,
+                keycode: keycode,
+                flags: event.flags,
+                senderID: senderID,
+                ugreenSenderIDs: ugreenSenderIDs
+            ) else {
                 return Unmanaged.passUnretained(event)
             }
 
