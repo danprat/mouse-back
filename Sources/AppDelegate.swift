@@ -129,29 +129,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // Tangkap SEMUA event input global
     private func setupGlobalMonitor() {
         let eventTypes: NSEvent.EventTypeMask = [
-            .leftMouseDown, .leftMouseUp,
-            .rightMouseDown, .rightMouseUp,
-            .otherMouseDown, .otherMouseUp,
-            .scrollWheel,
-            .keyDown, .flagsChanged,
-            .systemDefined,
-            .gesture, .swipe
+            .otherMouseDown, .otherMouseUp
         ]
 
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: eventTypes) { event in
             let isSide = (event.buttonNumber == 3 || event.buttonNumber == 4 || event.buttonNumber == 5)
-            let desc = "[NSEvent] Tipe=\(event.type.rawValue), Button=\(event.buttonNumber), Key=\(event.keyCode)"
-            logDebug(desc)
-            HUDWindowController.shared.updateEvent(text: desc, isSideButton: isSide)
+            if isSide {
+                let desc = "[NSEvent] Button=\(event.buttonNumber)"
+                logDebug(desc)
+                HUDWindowController.shared.updateEvent(text: desc, isSideButton: isSide)
 
-            if event.type == .otherMouseDown && isSide {
-                EventTapManager.shared.processButtonAction(buttonNumber: event.buttonNumber, source: "NSEventMonitor")
+                if event.type == .otherMouseDown {
+                    EventTapManager.shared.processButtonAction(buttonNumber: event.buttonNumber, source: "NSEventMonitor")
+                }
             }
         }
-        logDebug("NSEvent Global Monitor (Semua Event) terdaftar.")
+        logDebug("NSEvent Global Monitor terdaftar.")
     }
 
     func menuWillOpen(_ menu: NSMenu) {

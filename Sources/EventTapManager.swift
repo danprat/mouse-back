@@ -29,7 +29,7 @@ final class EventTapManager {
     private var runLoopSource: CFRunLoopSource?
     private var permissionTimer: Timer?
     private var lastTriggerTime: TimeInterval = 0
-    private let debounceInterval: TimeInterval = 0.20
+    private let debounceInterval: TimeInterval = 0.35
 
     private var copyIOHIDEvent: CGEventCopyIOHIDEventFunc?
     private var getSenderID: IOHIDEventGetSenderIDFunc?
@@ -147,12 +147,8 @@ final class EventTapManager {
         }
 
         let eventTypes: [CGEventType] = [
-            .leftMouseDown, .leftMouseUp,
-            .rightMouseDown, .rightMouseUp,
             .otherMouseDown, .otherMouseUp,
-            .scrollWheel,
-            .keyDown, .keyUp,
-            .flagsChanged
+            .keyDown, .keyUp
         ]
         var eventMask: CGEventMask = 0
         for evType in eventTypes {
@@ -226,67 +222,45 @@ final class EventTapManager {
             return Unmanaged.passUnretained(event)
         }
 
-        let buttonNumber = event.getIntegerValueField(.mouseEventButtonNumber)
         let keycode = event.getIntegerValueField(.keyboardEventKeycode)
-        let senderID = extractSenderID(for: event) ?? 0
-
-        // Catat sender ID mouse saat klik mouse terjadi
-        if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown || type == .scrollWheel {
-            if senderID != 0 {
-                knownMouseSenderIDs.insert(senderID)
-            }
-        }
 
         // 1. PENANGANAN TOMBOL SAMPING UGREEN (YANG MENGIRIM KEY 123 DAN KEY 124)
         if keycode == 123 || keycode == 124 {
-            let isKeyDown = (type == .keyDown)
-            let isKeyUp = (type == .keyUp)
+            guard isEnabled else { return nil }
 
-            if isKeyDown || isKeyUp {
-                let desc = "[UGREEN Tombol Samping] Key: \(keycode) (Tipe: \(type.rawValue))"
-                logDebug(desc)
+            if type == .keyDown {
+                let isBack = (keycode == 123)
+                let shouldGoBack = isSwapped ? !isBack : isBack
 
-                if isKeyDown {
-                    // Key 123 = Panah Kiri (Back)
-                    // Key 124 = Panah Kanan (Forward)
-                    let isBack = (keycode == 123)
-                    let shouldGoBack = isSwapped ? !isBack : isBack
-
-                    if shouldGoBack {
-                        let msg = "🟢 KEMBALI (Cmd + [) | Ugreen Side Button (Key \(keycode))"
-                        logDebug(">>> \(msg)")
-                        HUDWindowController.shared.updateEvent(text: msg, isSideButton: true)
-                        triggerBack()
-                        onButtonTriggered?("Kembali (Cmd + [)")
-                    } else {
-                        let msg = "🟢 MAJU (Cmd + ]) | Ugreen Side Button (Key \(keycode))"
-                        logDebug(">>> \(msg)")
-                        HUDWindowController.shared.updateEvent(text: msg, isSideButton: true)
-                        triggerForward()
-                        onButtonTriggered?("Maju (Cmd + ])")
-                    }
+                if shouldGoBack {
+                    let msg = "🟢 KEMBALI (Cmd + [) | Ugreen Side Button (Key \(keycode))"
+                    logDebug(">>> \(msg)")
+                    HUDWindowController.shared.updateEvent(text: msg, isSideButton: true)
+                    triggerBack()
+                    onButtonTriggered?("Kembali (Cmd + [)")
+                } else {
+                    let msg = "🟢 MAJU (Cmd + ]) | Ugreen Side Button (Key \(keycode))"
+                    logDebug(">>> \(msg)")
+                    HUDWindowController.shared.updateEvent(text: msg, isSideButton: true)
+                    triggerForward()
+                    onButtonTriggered?("Maju (Cmd + ])")
                 }
-
-                // Konsumsi event panah mentah agar tidak menggeser kursor / horizontal scroll
-                return nil
             }
+
+            // Telan event agar tidak terjadi aksi ganda atau kursor bergeser
+            return nil
         }
 
         // 2. PENANGANAN MOUSE STANDARD LAINNYA (JIKA MENGIRIM BUTTON 3, 4, 5)
         if type == .otherMouseDown || type == .otherMouseUp {
+            let buttonNumber = event.getIntegerValueField(.mouseEventButtonNumber)
             let isSide = (buttonNumber == 3 || buttonNumber == 4 || buttonNumber == 5)
-            if isSide {
+            if isSide && isEnabled {
                 if type == .otherMouseDown {
                     processButtonAction(buttonNumber: Int(buttonNumber), source: "CGEventTap")
                 }
                 return nil
             }
-        }
-
-        // Log interaksi biasa untuk pemantauan HUD
-        if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown {
-            let desc = "Klik: Button \(buttonNumber) (Tipe \(type.rawValue))"
-            HUDWindowController.shared.updateEvent(text: desc, isSideButton: false)
         }
 
         return Unmanaged.passUnretained(event)
@@ -339,7 +313,6 @@ final class EventTapManager {
 
             if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true) {
                 keyDown.flags = flags
-                keyDown.post(tap: .cgSessionEventTap)
                 keyDown.post(tap: .cghidEventTap)
             }
 
@@ -347,7 +320,6 @@ final class EventTapManager {
 
             if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) {
                 keyUp.flags = flags
-                keyUp.post(tap: .cgSessionEventTap)
                 keyUp.post(tap: .cghidEventTap)
             }
         }
