@@ -14,6 +14,7 @@ mkdir -p "${RESOURCES_DIR}"
 
 echo "🚀 Mengompilasi kode sumber Swift..."
 swiftc -O \
+    Sources/HUDWindow.swift \
     Sources/EventTapManager.swift \
     Sources/AppDelegate.swift \
     Sources/main.swift \

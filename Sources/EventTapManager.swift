@@ -26,7 +26,7 @@ final class EventTapManager {
     private var runLoopSource: CFRunLoopSource?
     private var permissionTimer: Timer?
     private var lastTriggerTime: TimeInterval = 0
-    private let debounceInterval: TimeInterval = 0.25 // 250ms debounce
+    private let debounceInterval: TimeInterval = 0.25
 
     var onStatusChanged: ((Bool, Bool) -> Void)?
     var onButtonTriggered: ((String) -> Void)?
@@ -114,8 +114,17 @@ final class EventTapManager {
             return
         }
 
-        let eventMask: CGEventMask = (1 << CGEventType.otherMouseDown.rawValue)
-            | (1 << CGEventType.otherMouseUp.rawValue)
+        let eventTypes: [CGEventType] = [
+            .leftMouseDown, .leftMouseUp,
+            .rightMouseDown, .rightMouseUp,
+            .otherMouseDown, .otherMouseUp,
+            .scrollWheel,
+            .keyDown, .flagsChanged
+        ]
+        var eventMask: CGEventMask = 0
+        for evType in eventTypes {
+            eventMask |= (1 << evType.rawValue)
+        }
 
         let refcon = Unmanaged.passUnretained(self).toOpaque()
 
@@ -184,19 +193,24 @@ final class EventTapManager {
             return Unmanaged.passUnretained(event)
         }
 
+        let buttonNumber = event.getIntegerValueField(.mouseEventButtonNumber)
+        let keycode = event.getIntegerValueField(.keyboardEventKeycode)
+        let isSide = (buttonNumber == 3 || buttonNumber == 4 || buttonNumber == 5)
+
+        let desc = "[CGEventTap] Tipe: \(type.rawValue), Button: \(buttonNumber), Key: \(keycode)"
+        logDebug(desc)
+        HUDWindowController.shared.updateEvent(text: desc, isSideButton: isSide)
+
         guard isEnabled else {
             return Unmanaged.passUnretained(event)
         }
 
         if type == .otherMouseDown || type == .otherMouseUp {
-            let buttonNumber = event.getIntegerValueField(.mouseEventButtonNumber)
-            logDebug("[CGEventTap] Event mouse terdeteksi: type=\(type.rawValue), buttonNumber=\(buttonNumber)")
-
-            if buttonNumber == 3 || buttonNumber == 4 || buttonNumber == 5 {
+            if isSide {
                 if type == .otherMouseDown {
                     processButtonAction(buttonNumber: Int(buttonNumber), source: "CGEventTap")
                 }
-                return nil // Konsumsi event agar tidak diteruskan mentah
+                return nil // Cegah event mentah diteruskan
             }
         }
 
@@ -208,11 +222,15 @@ final class EventTapManager {
         let shouldGoBack = isSwapped ? !isButtonBack : isButtonBack
 
         if shouldGoBack {
-            logDebug(">>> [\(source)] Aksi KEMBALI (Cmd + [) dipicu oleh Button \(buttonNumber)")
+            let msg = "🟢 KEMBALI (Cmd + [) | Button \(buttonNumber) via \(source)"
+            logDebug(">>> \(msg)")
+            HUDWindowController.shared.updateEvent(text: msg, isSideButton: true)
             triggerBack()
             onButtonTriggered?("Kembali (Cmd + [)")
         } else {
-            logDebug(">>> [\(source)] Aksi MAJU (Cmd + ]) dipicu oleh Button \(buttonNumber)")
+            let msg = "🟢 MAJU (Cmd + ]) | Button \(buttonNumber) via \(source)"
+            logDebug(">>> \(msg)")
+            HUDWindowController.shared.updateEvent(text: msg, isSideButton: true)
             triggerForward()
             onButtonTriggered?("Maju (Cmd + ])")
         }
@@ -225,7 +243,6 @@ final class EventTapManager {
             return
         }
         lastTriggerTime = now
-        // Cmd + [ (kVK_ANSI_LeftBracket = 0x21)
         simulateShortcut(keyCode: 0x21, flags: .maskCommand)
     }
 
@@ -236,7 +253,6 @@ final class EventTapManager {
             return
         }
         lastTriggerTime = now
-        // Cmd + ] (kVK_ANSI_RightBracket = 0x1E)
         simulateShortcut(keyCode: 0x1E, flags: .maskCommand)
     }
 

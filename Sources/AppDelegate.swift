@@ -7,16 +7,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusMenuItem: NSMenuItem!
     private var toggleMenuItem: NSMenuItem!
     private var swapMenuItem: NSMenuItem!
+    private var hudMenuItem: NSMenuItem!
     private var notificationMenuItem: NSMenuItem!
     private var launchAtLoginMenuItem: NSMenuItem!
     private var accessibilityMenuItem: NSMenuItem!
     private var globalMonitor: Any?
 
+    private var isHUDVisible: Bool = true
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        logDebug("=== APLIKASI MOUSEBACK DIMULAI ===")
+        logDebug("=== APLIKASI MOUSEBACK DIMULAI (DENGAN PEMANTAU HUD) ===")
         setupStatusBar()
         setupEventTap()
         setupGlobalMonitor()
+
+        // Tampilkan HUD pemantau langsung di layar
+        HUDWindowController.shared.showHUD()
     }
 
     private func setupStatusBar() {
@@ -57,31 +63,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         swapMenuItem.target = self
         menu.addItem(swapMenuItem)
 
-        // 4. Opsi Notifikasi Pengujian
+        // 4. Toggle Jendela Monitor (HUD)
+        hudMenuItem = NSMenuItem(title: "Tampilkan Jendela Monitor Sinyal (HUD)", action: #selector(toggleHUD), keyEquivalent: "")
+        hudMenuItem.target = self
+        menu.addItem(hudMenuItem)
+
+        // 5. Opsi Notifikasi Pengujian
         notificationMenuItem = NSMenuItem(title: "Tampilkan Notifikasi Pop-up saat Tombol Ditekan", action: #selector(toggleNotifications), keyEquivalent: "")
         notificationMenuItem.target = self
         menu.addItem(notificationMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        // 5. Launch at Login
+        // 6. Launch at Login
         launchAtLoginMenuItem = NSMenuItem(title: "Buka Otomatis saat Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         launchAtLoginMenuItem.target = self
         menu.addItem(launchAtLoginMenuItem)
 
-        // 6. Aksesibilitas
+        // 7. Aksesibilitas
         accessibilityMenuItem = NSMenuItem(title: "Buka Pengaturan Aksesibilitas...", action: #selector(openAccessibilitySettings), keyEquivalent: "")
         accessibilityMenuItem.target = self
         menu.addItem(accessibilityMenuItem)
 
-        // 7. Buka File Log
+        // 8. Buka File Log
         let logMenuItem = NSMenuItem(title: "Buka File Log (/tmp/mouseback.log)...", action: #selector(openLogFile), keyEquivalent: "")
         logMenuItem.target = self
         menu.addItem(logMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        // 8. Tentang & Keluar
+        // 9. Tentang & Keluar
         let aboutMenuItem = NSMenuItem(title: "Tentang MouseBack", action: #selector(showAbout), keyEquivalent: "")
         aboutMenuItem.target = self
         menu.addItem(aboutMenuItem)
@@ -117,17 +128,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // AppKit Level Global Monitor sebagai pelengkap CGEventTap
+    // Tangkap SEMUA event input global
     private func setupGlobalMonitor() {
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.otherMouseDown, .otherMouseUp]) { [weak self] event in
-            logDebug("[NSEvent Monitor] Tipe: \(event.type.rawValue), Button: \(event.buttonNumber)")
-            if event.type == .otherMouseDown {
-                if event.buttonNumber == 3 || event.buttonNumber == 4 || event.buttonNumber == 5 {
-                    EventTapManager.shared.processButtonAction(buttonNumber: event.buttonNumber, source: "NSEventMonitor")
-                }
+        let eventTypes: NSEvent.EventTypeMask = [
+            .leftMouseDown, .leftMouseUp,
+            .rightMouseDown, .rightMouseUp,
+            .otherMouseDown, .otherMouseUp,
+            .scrollWheel,
+            .keyDown, .flagsChanged,
+            .systemDefined,
+            .gesture, .swipe
+        ]
+
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: eventTypes) { event in
+            let isSide = (event.buttonNumber == 3 || event.buttonNumber == 4 || event.buttonNumber == 5)
+            let desc = "[NSEvent] Tipe=\(event.type.rawValue), Button=\(event.buttonNumber), Key=\(event.keyCode)"
+            logDebug(desc)
+            HUDWindowController.shared.updateEvent(text: desc, isSideButton: isSide)
+
+            if event.type == .otherMouseDown && isSide {
+                EventTapManager.shared.processButtonAction(buttonNumber: event.buttonNumber, source: "NSEventMonitor")
             }
         }
-        logDebug("NSEvent Global Monitor terdaftar.")
+        logDebug("NSEvent Global Monitor (Semua Event) terdaftar.")
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -151,6 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         toggleMenuItem.state = isEnabled ? .on : .off
         swapMenuItem.state = isSwapped ? .on : .off
+        hudMenuItem.state = isHUDVisible ? .on : .off
         notificationMenuItem.state = showNotifications ? .on : .off
 
         if #available(macOS 13.0, *) {
@@ -176,6 +200,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleSwap() {
         EventTapManager.shared.isSwapped.toggle()
+        updateMenuStates()
+    }
+
+    @objc private func toggleHUD() {
+        isHUDVisible.toggle()
+        if isHUDVisible {
+            HUDWindowController.shared.showHUD()
+        } else {
+            HUDWindowController.shared.hideHUD()
+        }
         updateMenuStates()
     }
 
@@ -218,7 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let alert = NSAlert()
         alert.messageText = "MouseBack"
         alert.informativeText = """
-        Versi 1.2.0
+        Versi 1.3.0
         Aplikasi Menu Bar untuk tombol samping (Back & Forward) pada mouse Bluetooth Ugreen dan mouse lainnya.
 
         Shortcut navigasi:
